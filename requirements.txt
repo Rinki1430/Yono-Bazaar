@@ -1,4 +1,0 @@
-python-telegram-bot==21.10
-APScheduler==3.10.4
-python-dotenv==1.0.1
-pytz==2024.1
