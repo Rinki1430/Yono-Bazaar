@@ -1,0 +1,20 @@
+# Environment variables (NEVER commit this)
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+env/
+.venv/
+
+# Bot runtime data (should persist via Railway Volume, not git)
+bot_database.db
+bot.log
+*.db
+*.db-journal
+
+# OS files
+.DS_Store
+Thumbs.db
