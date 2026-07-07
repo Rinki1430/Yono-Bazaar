@@ -30,6 +30,7 @@ from typing import Any, Optional
 
 import pytz
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from dotenv import load_dotenv
 from telegram import (
@@ -65,6 +66,17 @@ CHANNEL_ID: str = os.getenv("CHANNEL_ID", "")
 DEFAULT_TIMEZONE: str = os.getenv("TIMEZONE", "Asia/Kolkata")
 DB_PATH: str = os.getenv("DB_PATH", "bot_database.db")
 LOG_PATH: str = os.getenv("LOG_PATH", "bot.log")
+
+# --- Feature 16 — Automatic Channel Boost Reminder ---
+# Sends a "please boost the channel" post automatically, twice a week.
+BOOST_URL: str = os.getenv("BOOST_URL", "https://t.me/boost/yonobazaars")
+# Comma-separated APScheduler day_of_week codes: mon,tue,wed,thu,fri,sat,sun
+# Default = Monday & Thursday (2x per week)
+BOOST_DAYS: str = os.getenv("BOOST_DAYS", "mon,thu")
+BOOST_HOUR: int = int(os.getenv("BOOST_HOUR", "7"))
+BOOST_MINUTE: int = int(os.getenv("BOOST_MINUTE", "0"))
+# Timezone the boost schedule runs in (independent of DEFAULT_TIMEZONE if needed)
+BOOST_TIMEZONE: str = os.getenv("BOOST_TIMEZONE", "Asia/Kolkata")
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is missing. Please set it in your .env file.")
@@ -347,6 +359,7 @@ def kb_admin_dashboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("⚙ Settings", callback_data="adm_settings"),
                 InlineKeyboardButton("📢 Publish", callback_data="adm_publish"),
             ],
+            [InlineKeyboardButton("🚀 Send Boost Reminder Now", callback_data="adm_boost_now")],
         ]
     )
 
@@ -408,6 +421,12 @@ def kb_confirm_schedule() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("⬅ Back", callback_data="cp_preview")],
             [InlineKeyboardButton("❌ Cancel", callback_data="cp_cancel")],
         ]
+    )
+
+
+def kb_boost() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("🚀 Boost Channel Now", url=BOOST_URL)]]
     )
 
 
@@ -890,6 +909,91 @@ async def publish_post_to_channel(context: ContextTypes.DEFAULT_TYPE, draft: dic
 
 
 # --------------------------------------------------------------------------- #
+# Feature 16 — Automatic Channel Boost Reminder (2x/week)
+# --------------------------------------------------------------------------- #
+
+
+def build_boost_message() -> str:
+    """Return the HTML-formatted boost-request post shown to channel members."""
+    return (
+        "🚀 <b>Channel Boost Time!</b>\n\n"
+        "Hamare channel ko sirf <b>1 tap</b> mein boost karo aur ise aur bada, "
+        "aur strong banane mein help karo! 💪\n\n"
+        "Boost karne se channel ko premium perks milte hain — jitna zyada boost, "
+        "utna behtar experience sabke liye. ❤️\n\n"
+        "👇 Neeche button dabao aur boost karo:"
+    )
+
+
+async def send_boost_reminder(application: Application) -> None:
+    """Post the boost-request message to the channel. Runs on the cron schedule
+    and can also be triggered manually from the admin dashboard."""
+    try:
+        sent = await application.bot.send_message(
+            CHANNEL_ID,
+            build_boost_message(),
+            parse_mode=ParseMode.HTML,
+            reply_markup=kb_boost(),
+        )
+        await log_action("INFO", "Boost reminder sent", f"message_id={sent.message_id}")
+    except TelegramError as exc:
+        logger.exception("Failed to send boost reminder")
+        await log_action("ERROR", "Boost reminder failed", str(exc))
+        try:
+            await application.bot.send_message(
+                ADMIN_ID,
+                f"❌ <b>Boost reminder failed to send</b>\n\n<code>{html_escape(str(exc))}</code>",
+                parse_mode=ParseMode.HTML,
+            )
+        except TelegramError:
+            logger.exception("Failed to notify admin about boost reminder failure")
+
+
+def schedule_boost_reminder(scheduler: AsyncIOScheduler, application: Application) -> None:
+    """Register the recurring boost-reminder cron job (idempotent)."""
+    job_id = "boost_reminder"
+    if scheduler.get_job(job_id):
+        scheduler.remove_job(job_id)
+    scheduler.add_job(
+        send_boost_reminder,
+        trigger=CronTrigger(
+            day_of_week=BOOST_DAYS,
+            hour=BOOST_HOUR,
+            minute=BOOST_MINUTE,
+            timezone=pytz.timezone(BOOST_TIMEZONE),
+        ),
+        args=[application],
+        id=job_id,
+        misfire_grace_time=3600,
+        replace_existing=True,
+    )
+    logger.info(
+        "Boost reminder scheduled: days=%s time=%02d:%02d tz=%s",
+        BOOST_DAYS, BOOST_HOUR, BOOST_MINUTE, BOOST_TIMEZONE,
+    )
+
+
+@admin_only
+async def cmd_testboost(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin command to manually fire the boost reminder immediately (for testing)."""
+    await update.message.reply_text("⏳ Sending boost reminder to the channel...")
+    await send_boost_reminder(context.application)
+    await update.message.reply_text("✅ Boost reminder sent (check the channel).")
+
+
+@admin_only
+async def cb_admin_boost_now(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer("🚀 Sending boost reminder...")
+    await send_boost_reminder(context.application)
+    await safe_edit(
+        query.message,
+        "✅ <b>Boost reminder sent to the channel!</b>",
+        kb_home_only(),
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Feature 5 — Scheduled Posts
 # --------------------------------------------------------------------------- #
 
@@ -1203,12 +1307,18 @@ async def scheduled_edit_receive(update: Update, context: ContextTypes.DEFAULT_T
 async def cb_admin_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
+    boost_days_label = BOOST_DAYS.replace(",", ", ").upper()
     text = (
         "⚙ <b>Settings</b>\n\n"
         f"📢 Channel: <code>{html_escape(CHANNEL_ID)}</code>\n"
         f"🌍 Default Timezone: <code>{DEFAULT_TIMEZONE}</code>\n"
         f"👤 Admin ID: <code>{ADMIN_ID}</code>\n\n"
-        "To change these values, update your <code>.env</code> file and restart the bot."
+        "🚀 <b>Boost Reminder Schedule</b>\n"
+        f"🗓 Days: <code>{boost_days_label}</code>\n"
+        f"🕒 Time: <code>{BOOST_HOUR:02d}:{BOOST_MINUTE:02d} {BOOST_TIMEZONE}</code>\n"
+        f"🔗 Link: {html_escape(BOOST_URL)}\n\n"
+        "To change these values, update your <code>.env</code> file and restart the bot. "
+        "Use /testboost to send a boost reminder immediately."
     )
     await safe_edit(query.message, text, kb_home_only())
 
@@ -1297,6 +1407,7 @@ async def post_init(application: Application) -> None:
     application.bot_data["scheduler"] = scheduler
 
     await restore_scheduled_jobs(application)
+    schedule_boost_reminder(scheduler, application)
     await log_action("INFO", "Bot started", "Application initialized successfully")
 
     try:
@@ -1326,6 +1437,7 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("admin", cmd_admin))
     application.add_handler(CommandHandler("scheduled", cmd_scheduled))
     application.add_handler(CommandHandler("cancel", cmd_cancel))
+    application.add_handler(CommandHandler("testboost", cmd_testboost))
 
     # --- Join request workflow ---
     application.add_handler(ChatJoinRequestHandler(handle_join_request))
@@ -1336,6 +1448,7 @@ def build_application() -> Application:
     application.add_handler(CallbackQueryHandler(cb_admin_pending, pattern="^adm_pending$"))
     application.add_handler(CallbackQueryHandler(cb_admin_scheduled, pattern="^adm_scheduled$"))
     application.add_handler(CallbackQueryHandler(cb_admin_settings, pattern="^adm_settings$"))
+    application.add_handler(CallbackQueryHandler(cb_admin_boost_now, pattern="^adm_boost_now$"))
     application.add_handler(CallbackQueryHandler(cb_admin_home, pattern="^adm_home$"))
 
     # --- Scheduled posts manager (non-conversation actions) ---

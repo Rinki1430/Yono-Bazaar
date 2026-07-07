@@ -26,6 +26,7 @@ instant and scheduled publishing, and a live statistics dashboard.
 | 13 | Admin-only access control, parameterized SQL (no injection risk), duplicate-publish protection |
 | 14 | Confirmation dialogs, Cancel/Home/Back navigation, conversation timeouts |
 | 15 | Clean, typed, PEP8-formatted async code |
+| 16 | **Automatic Channel Boost Reminder** — posts a "boost the channel" message with a tap-to-boost button, automatically twice a week (default: Mon & Thu, 7:00 AM Asia/Kolkata). Fully configurable via `.env`. Trigger manually anytime with `/testboost` or the "🚀 Send Boost Reminder Now" button in `/admin`. |
 
 ---
 
@@ -74,6 +75,13 @@ BOT_TOKEN=123456789:AAExampleTokenFromBotFather
 ADMIN_ID=987654321
 CHANNEL_ID=-1001234567890
 TIMEZONE=Asia/Kolkata
+
+# Automatic Boost Reminder (optional — defaults shown below)
+BOOST_URL=https://t.me/boost/yonobazaars
+BOOST_DAYS=mon,thu
+BOOST_HOUR=7
+BOOST_MINUTE=0
+BOOST_TIMEZONE=Asia/Kolkata
 ```
 
 ### 5. Run the bot
@@ -149,7 +157,20 @@ bot can act on.
      - **❌ Cancel** — abort at any point.
 - `/scheduled` — lists all pending scheduled posts with **✏ Edit / 🗑 Delete / ▶ Publish Now**
   buttons for each.
+- `/testboost` — instantly sends the channel-boost reminder (for testing; doesn't affect the schedule).
 - `/cancel` — cancels whatever multi-step flow is currently active.
+
+### 🚀 Automatic Channel Boost Reminder
+Twice a week, the bot automatically posts a message to `CHANNEL_ID` encouraging members to
+boost the channel, with an inline **🚀 Boost Channel Now** button that deep-links straight to
+`BOOST_URL` (default: `https://t.me/boost/yonobazaars`).
+
+- **Default schedule:** Monday & Thursday, 7:00 AM, `Asia/Kolkata` — fully configurable via
+  `BOOST_DAYS`, `BOOST_HOUR`, `BOOST_MINUTE`, and `BOOST_TIMEZONE` in `.env`.
+- Runs automatically in the background via APScheduler — no manual action needed once deployed.
+- You can view the current schedule any time from `/admin` → **⚙ Settings**.
+- Trigger it manually (without waiting for the schedule) with `/testboost`, or the
+  **🚀 Send Boost Reminder Now** button on the Admin Dashboard.
 
 ### Join requests
 When a user requests to join your channel, the bot automatically notifies the admin with
